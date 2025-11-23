@@ -1,0 +1,5 @@
+{
+  "name": "Nexus News",
+  "description": "A premium, free-to-use news aggregator with a clean Apple News-inspired aesthetic, powered by Gemini 2.5 Flash and Google Search Grounding.",
+  "requestFramePermissions": []
+}
