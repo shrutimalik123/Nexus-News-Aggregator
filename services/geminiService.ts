@@ -17,18 +17,19 @@ export const fetchNews = async (topic: string): Promise<FetchNewsResponse> => {
   try {
     const prompt = `
       You are a professional news editor for a high-end news aggregator.
-      Find the top 5 latest news headlines and summaries for the topic: "${topic}".
+      Find the top 12 latest news headlines and summaries for the topic: "${topic}".
       
       Requirements:
       1. Use the Google Search tool to find real, up-to-date information.
       2. Return the data in a strict text format that I can parse.
-      3. For each story, use this exact separator: "|||"
-      4. Format each story exactly like this:
+      3. Separate each story strictly with the delimiter "|||".
+      4. Format each story block exactly like this:
          HEADLINE: [The Headline]
          SUMMARY: [A concise, one-sentence summary]
          SOURCE_NAME: [The name of the publisher, e.g., CNN, The Verge]
       
-      Do not add numbering or markdown bolding (**). Just plain text fields.
+      Do not add numbering, bullet points, or markdown bolding (**). Just plain text fields.
+      Ensure you provide exactly 12 distinct stories.
     `;
 
     const response = await ai.models.generateContent({
@@ -36,8 +37,6 @@ export const fetchNews = async (topic: string): Promise<FetchNewsResponse> => {
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
-        // responseMimeType cannot be JSON when using googleSearch in some contexts, 
-        // so we use text parsing for maximum reliability with grounding.
       },
     });
 
@@ -46,23 +45,44 @@ export const fetchNews = async (topic: string): Promise<FetchNewsResponse> => {
     
     // 2. Extract Grounding Metadata (Sources)
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    
+    // Filter and map valid sources. We allow chunks that at least have a URI.
     const sources: NewsSource[] = groundingChunks
-      .filter((chunk: any) => chunk.web?.uri && chunk.web?.title)
-      .map((chunk: any) => ({
-        title: chunk.web.title,
-        uri: chunk.web.uri,
-      }));
+      .filter((chunk: any) => chunk.web?.uri)
+      .map((chunk: any) => {
+        let title = chunk.web.title;
+        // Fallback to domain name if title is missing
+        if (!title && chunk.web.uri) {
+           try {
+             title = new URL(chunk.web.uri).hostname.replace('www.', '');
+           } catch (e) {
+             title = "Source";
+           }
+        }
+        return {
+          title: title || "News Source",
+          uri: chunk.web.uri,
+        };
+      });
 
     // 3. Parse the text response into objects
     const articles: NewsItem[] = parseNewsResponse(textData, topic);
 
     // 4. Map sources to articles
-    // Since the text generation is a list of top stories and grounding chunks are the sources found,
-    // we attempt to map available source URIs to the articles.
-    // If there are more articles than sources, some might not get a direct link (handled in UI via fallback).
+    // Map available source URIs to the articles to ensure clicking works.
     articles.forEach((article, index) => {
+      // Try to match the article to a source. 
+      // Since generation and grounding chunks might not align 1:1 perfectly by index,
+      // we do a best effort mapping by index, or default to a search link.
+      
       if (sources[index]) {
         article.sourceUrl = sources[index].uri;
+        
+        // If the AI didn't provide a specific source name in the text, 
+        // use the title from the grounding metadata which is often more accurate.
+        if (article.sourceName === "News Wire" && sources[index].title) {
+          article.sourceName = sources[index].title;
+        }
       }
     });
     
@@ -79,7 +99,8 @@ export const fetchNews = async (topic: string): Promise<FetchNewsResponse> => {
 
 // Helper to parse the custom delimiter format
 const parseNewsResponse = (text: string, topic: string): NewsItem[] => {
-  const items = text.split('|||').map(s => s.trim()).filter(s => s.length > 10);
+  // Split by delimiter and filter out empty strings
+  const items = text.split('|||').map(s => s.trim()).filter(s => s.length > 20);
   
   return items.map((item, index) => {
     const headlineMatch = item.match(/HEADLINE:\s*(.+)/);
@@ -92,25 +113,25 @@ const parseNewsResponse = (text: string, topic: string): NewsItem[] => {
       summary: summaryMatch ? summaryMatch[1].trim() : "Summary unavailable.",
       sourceName: sourceMatch ? sourceMatch[1].trim() : "News Wire",
       // Deterministic image based on index for the demo
-      imageUrl: `https://picsum.photos/800/600?random=${index + (topic.length)}` 
+      imageUrl: `https://picsum.photos/800/600?random=${index + (topic.length * 2)}` 
     };
-  }).slice(0, 5); // Ensure exactly 5 max
+  }).slice(0, 12); // Limit to 12 items
 };
 
 // Fallback data in case API key is missing or fails
 const getMockData = (topic: string): FetchNewsResponse => {
   return {
-    articles: Array.from({ length: 5 }).map((_, i) => ({
+    articles: Array.from({ length: 12 }).map((_, i) => ({
       id: `mock-${i}`,
-      headline: `Latest Major Update in ${topic} Industry Reaches New Heights`,
+      headline: `Latest Major Update in ${topic} Industry Reaches New Heights (${i + 1})`,
       summary: `This is a simulated summary for ${topic} demonstrating the visual layout of the card system while the API is configured.`,
       sourceName: "Nexus Wire",
       imageUrl: `https://picsum.photos/800/600?random=${i + 10}`,
       sourceUrl: `https://www.google.com/search?q=${topic}+news` // Mock URL
     })),
     sources: [
-      { title: "Example Source News", uri: "#" },
-      { title: "Global Tech Daily", uri: "#" }
+      { title: "Example Source News", uri: "https://news.google.com" },
+      { title: "Global Tech Daily", uri: "https://news.google.com" }
     ]
   };
 };
